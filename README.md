@@ -80,8 +80,8 @@ source checkout in `src/`.
 ```bash
 git clone --depth 1 https://github.com/SpecterOps/BloodHound.git src
 scripts/fetch-postgres.sh all        # pgbin/{win,linux}
-BH_VERSION=v9.9.2 scripts/build.sh windows   # dist/BloodHoundCE.exe
-BH_VERSION=v9.9.2 scripts/build.sh linux     # dist/BloodHoundCE-linux
+BH_VERSION=v9.10.0 scripts/build.sh windows   # dist/BloodHoundCE.exe
+BH_VERSION=v9.10.0 scripts/build.sh linux     # dist/BloodHoundCE-linux
 ```
 
 `BH_VERSION` stamps `cmd/api/src/version` via ldflags; without it the UI shows
@@ -115,8 +115,8 @@ never sees EOF.
 `upstream.env` pins the upstream version and commit:
 
 ```
-BH_VERSION=v9.9.2
-BH_COMMIT=54b4e764e645468d8393f99214ab9611bb171f83
+BH_VERSION=v9.10.0
+BH_COMMIT=93dcb33af324ef6b080f9bd110d65c8ee2ea8bc4
 ```
 
 `.github/workflows/windows-build.yml` has a `prepare` job that decides what to
@@ -163,13 +163,13 @@ binaries. End-to-end on this machine:
 - ingest upload: `POST /api/v2/file-upload/start` → upload a ZIP →
   `POST /api/v2/file-upload/{id}/end` → 202/200, `File written and validated`;
 - browser: Download Collectors renders SharpHound v2.18.0 and AzureHound
-  v3.1.3, no error boundary; footer shows `BloodHound: v9.9.2`;
+  v3.1.3, no error boundary; footer shows `BloodHound: v9.10.0`;
 - restart reuses the cluster and the persisted secrets;
 - Ctrl+C stops BloodHound and PostgreSQL cleanly (no postmaster left).
 
 `dist/BloodHoundCE.exe` was then run on the Windows host: extraction, `initdb`,
 PostgreSQL, migrations, extension data population, UI `/ui/` → 200, a hashed JS
-asset → 200, admin login → session token, `/api/version` → `v9.9.2`, collector
+asset → 200, admin login → session token, `/api/version` → `v9.10.0`, collector
 manifests for SharpHound and AzureHound with working `latest` downloads, and a
 ZIP ingest upload → 202 (`File written and validated`). Both the PostgreSQL
 server (`postgres.exe`) and BloodHound (`bloodhound.exe`) were running from
