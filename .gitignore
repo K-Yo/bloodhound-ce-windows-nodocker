@@ -1,0 +1,8 @@
+/build/
+/dist/
+/launcher/payload/payload.zip
+/toolchain/
+/pgbin/
+/vcredist/
+/src/
+/*.exe

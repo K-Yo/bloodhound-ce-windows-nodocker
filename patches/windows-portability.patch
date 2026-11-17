@@ -1,0 +1,106 @@
+diff --git a/cmd/api/src/api/static/static.go b/cmd/api/src/api/static/static.go
+index d64c738..f4692e4 100644
+--- a/cmd/api/src/api/static/static.go
++++ b/cmd/api/src/api/static/static.go
+@@ -22,6 +22,7 @@ import (
+ 	"log/slog"
+ 	"mime"
+ 	"net/http"
++	"path"
+ 	"path/filepath"
+ 	"strings"
+ 
+@@ -48,9 +49,9 @@ func MakeAssetHandler(cfg AssetConfig) http.Handler {
+ // return the index.html asset. This is done because the UI will change with the browser URI depending on the UI view.
+ // This results in the browser asking for assets that do not exist upon browser refresh.
+ func fetchAsset(cfg AssetConfig, assetPath string) (fs.File, error) {
+-	if fin, err := cfg.FS.Open(filepath.Join(cfg.BasePath, assetPath)); err != nil {
++	if fin, err := cfg.FS.Open(path.Join(cfg.BasePath, assetPath)); err != nil {
+ 		if cfg.IndexPath != "" {
+-			return cfg.FS.Open(filepath.Join(cfg.BasePath, cfg.IndexPath))
++			return cfg.FS.Open(path.Join(cfg.BasePath, cfg.IndexPath))
+ 		}
+ 		return nil, err
+ 	} else {
+diff --git a/cmd/api/src/database/migration/goose.go b/cmd/api/src/database/migration/goose.go
+index 5f7552a..1cbcf5d 100644
+--- a/cmd/api/src/database/migration/goose.go
++++ b/cmd/api/src/database/migration/goose.go
+@@ -21,7 +21,7 @@ import (
+ 	"fmt"
+ 	"io/fs"
+ 	"log/slog"
+-	"path/filepath"
++	"path"
+ 	"strings"
+ 
+ 	"github.com/pressly/goose/v3"
+@@ -78,8 +78,8 @@ func (s *Migrator) ExecuteExtensionDataPopulation() error {
+ 				continue
+ 			}
+ 
+-			filename := filepath.Join(source.Directory, entry.Name())
+-			basename := filepath.Base(filename)
++			filename := path.Join(source.Directory, entry.Name())
++			basename := path.Base(filename)
+ 
+ 			if !strings.HasSuffix(basename, migrationSQLFilenameSuffix) {
+ 				continue
+@@ -234,7 +234,7 @@ func (s *Migrator) populateMigrationDescription(provider *goose.Provider) error
+ 	sources := provider.ListSources()
+ 
+ 	for _, source := range sources {
+-		filename := filepath.Base(source.Path)
++		filename := path.Base(source.Path)
+ 		parts := strings.SplitN(strings.TrimSuffix(filename, ".sql"), "_", 2)
+ 
+ 		var description string
+diff --git a/cmd/api/src/database/migration/manifest.go b/cmd/api/src/database/migration/manifest.go
+index 01f1a59..896529d 100644
+--- a/cmd/api/src/database/migration/manifest.go
++++ b/cmd/api/src/database/migration/manifest.go
+@@ -22,7 +22,7 @@ package migration
+ 
+ import (
+ 	"io/fs"
+-	"path/filepath"
++	"path"
+ 	"sort"
+ 	"strings"
+ 
+@@ -89,8 +89,8 @@ func (s *Migrator) GenerateManifestAfterVersion(lastVersion version.Version) (Ma
+ 			// loop through file system entries
+ 			for _, entry := range dirEntries {
+ 				if !entry.IsDir() {
+-					filename := filepath.Join(source.Directory, entry.Name())
+-					basename := filepath.Base(filename)
++					filename := path.Join(source.Directory, entry.Name())
++					basename := path.Base(filename)
+ 
+ 					// create an entry, which may or may not be added (depending on filename semantics)
+ 					var (
+diff --git a/packages/go/storage/localstore.go b/packages/go/storage/localstore.go
+index 262ef2b..8bcdac3 100644
+--- a/packages/go/storage/localstore.go
++++ b/packages/go/storage/localstore.go
+@@ -25,6 +25,7 @@ import (
+ 	"mime"
+ 	"os"
+ 	"path"
++	"runtime"
+ 	"strings"
+ 	"sync"
+ 	"syscall"
+@@ -100,6 +101,12 @@ func syncDir(root *os.Root, dir string) error {
+ 	}
+ 	defer dirFile.Close()
+ 
++	if runtime.GOOS == "windows" {
++		// Windows does not support flushing directory handles; FlushFileBuffers
++		// on a directory returns ERROR_ACCESS_DENIED. NTFS journals metadata.
++		return nil
++	}
++
+ 	return dirFile.Sync()
+ }
+ 
