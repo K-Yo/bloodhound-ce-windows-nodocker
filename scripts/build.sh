@@ -18,8 +18,18 @@ fi
 export PATH="$(dirname "$GO"):$PATH"
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 
-VERSION="$(git -C "$ROOT/src" rev-parse --short HEAD)"
-PAYLOAD_ID="bhce-$VERSION-$(date -u +%Y%m%d%H%M%S)"
+GIT_VERSION="$(git -C "$ROOT/src" rev-parse --short HEAD)"
+PAYLOAD_ID="bhce-$GIT_VERSION-$(date -u +%Y%m%d%H%M%S)"
+APP_VERSION="${BH_VERSION:-$(git -C "$ROOT/src" describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)}"
+APP_VERSION="${APP_VERSION#v}"
+[ -n "$APP_VERSION" ] || APP_VERSION="0.0.0"
+VERSION_PKG="github.com/specterops/bloodhound/cmd/api/src/version"
+IFS='.-' read -r V_MAJOR V_MINOR V_PATCH V_PRE _ <<< "$APP_VERSION" || true
+VERSION_LDFLAGS="-X '$VERSION_PKG.majorVersion=$V_MAJOR' -X '$VERSION_PKG.minorVersion=$V_MINOR' -X '$VERSION_PKG.patchVersion=$V_PATCH'"
+if [ -n "${V_PRE:-}" ]; then
+    VERSION_LDFLAGS="$VERSION_LDFLAGS -X '$VERSION_PKG.prereleaseVersion=$V_PRE'"
+fi
+echo "==> BloodHound version: $APP_VERSION"
 
 build_ui() {
     if [ ! -f "$ROOT/src/cmd/ui/dist/index.html" ]; then
@@ -39,7 +49,7 @@ build_api() {
     local goos=$1 out=$2
     echo "==> building bhapi for $goos"
     (cd "$ROOT/src/cmd/api/src" && \
-        CGO_ENABLED=0 GOOS="$goos" GOARCH=amd64 "$GO" build -trimpath -ldflags "-s -w" -o "$out" ./cmd/bhapi)
+        CGO_ENABLED=0 GOOS="$goos" GOARCH=amd64 "$GO" build -trimpath -ldflags "-s -w $VERSION_LDFLAGS" -o "$out" ./cmd/bhapi)
 }
 
 stage_payload() {
@@ -60,6 +70,10 @@ stage_payload() {
     if [ -f "$ROOT/build/collectors/SharpHound_v2.18.0_windows_x86.zip" ]; then
         cp "$ROOT/build/collectors/SharpHound_v2.18.0_windows_x86.zip" "$dir/collectors/sharphound/sharphound-v2.18.0.zip"
         sha256sum "$dir/collectors/sharphound/sharphound-v2.18.0.zip" | sed 's# .*/#  #' > "$dir/collectors/sharphound/sharphound-v2.18.0.zip.sha256"
+    fi
+    if [ -f "$ROOT/build/collectors/AzureHound_v3.1.3_windows_amd64.zip" ]; then
+        cp "$ROOT/build/collectors/AzureHound_v3.1.3_windows_amd64.zip" "$dir/collectors/azurehound/azurehound-v3.1.3.zip"
+        sha256sum "$dir/collectors/azurehound/azurehound-v3.1.3.zip" | sed 's# .*/#  #' > "$dir/collectors/azurehound/azurehound-v3.1.3.zip.sha256"
     fi
     touch "$dir/collectors/azurehound/.keep" "$dir/extensions/.keep"
 
@@ -84,6 +98,14 @@ if [ ! -f "$ROOT/build/collectors/SharpHound_v2.18.0_windows_x86.zip" ]; then
         curl -sSLO https://github.com/SpecterOps/SharpHound/releases/download/v2.18.0/SharpHound_v2.18.0_windows_x86.zip && \
         curl -sSLO https://github.com/SpecterOps/SharpHound/releases/download/v2.18.0/SharpHound_v2.18.0_windows_x86.zip.sha256 && \
         sha256sum -c SharpHound_v2.18.0_windows_x86.zip.sha256)
+fi
+
+if [ ! -f "$ROOT/build/collectors/AzureHound_v3.1.3_windows_amd64.zip" ]; then
+    echo "==> fetching AzureHound"
+    (cd "$ROOT/build/collectors" && \
+        curl -sSLO https://github.com/SpecterOps/AzureHound/releases/download/v3.1.3/AzureHound_v3.1.3_windows_amd64.zip && \
+        curl -sSLO https://github.com/SpecterOps/AzureHound/releases/download/v3.1.3/AzureHound_v3.1.3_windows_amd64.zip.sha256 && \
+        sha256sum -c AzureHound_v3.1.3_windows_amd64.zip.sha256)
 fi
 
 build_ui

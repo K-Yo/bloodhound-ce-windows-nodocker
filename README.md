@@ -80,28 +80,35 @@ source checkout in `src/`.
 ```bash
 git clone --depth 1 https://github.com/SpecterOps/BloodHound.git src
 scripts/fetch-postgres.sh all        # pgbin/{win,linux}
-scripts/build.sh windows             # dist/BloodHoundCE.exe
-scripts/build.sh linux               # dist/BloodHoundCE-linux (verification build)
+BH_VERSION=v9.9.2 scripts/build.sh windows   # dist/BloodHoundCE.exe
+BH_VERSION=v9.9.2 scripts/build.sh linux     # dist/BloodHoundCE-linux
 ```
 
-The build embeds `launcher/payload/payload.zip`; that file is regenerated from
-`pgbin/` + the freshly built `bloodhound` binary on every run.
+`BH_VERSION` stamps `cmd/api/src/version` via ldflags; without it the UI shows
+no server version (`v999.999.999`). The build also fetches SharpHound v2.18.0
+and AzureHound v3.1.3 for the Download Collectors page. The embedded
+`launcher/payload/payload.zip` is regenerated from `pgbin/` + the freshly built
+`bloodhound` binary on every run.
 
-The upstream sources need three Windows portability fixes, kept in
-`patches/windows-portability.patch`:
+The upstream sources need these fixes:
 
-- `api/static/static.go`: UI assets live in an `embed.FS`, which requires `/`
-  separators; `filepath.Join` produced `assets\...` and every asset 404'd.
-- `database/migration/goose.go`, `manifest.go`: same issue for embedded migration
-  and extension SQL paths (`extensions\ad_graph_schema.sql`).
-- `packages/go/storage/localstore.go`: Windows cannot `fsync` a directory handle
-  (`ERROR_ACCESS_DENIED`); every ingest upload failed with
-  `sync ...\work\tmp\.: Access is denied`.
+- `patches/windows-portability.patch`:
+  - `api/static/static.go`: UI assets live in an `embed.FS`, which requires `/`
+    separators; `filepath.Join` produced `assets\...` and every asset 404'd.
+  - `database/migration/goose.go`, `manifest.go`: same issue for embedded
+    migration and extension SQL paths (`extensions\ad_graph_schema.sql`).
+  - `packages/go/storage/localstore.go`: Windows cannot `fsync` a directory handle
+    (`ERROR_ACCESS_DENIED`); every ingest upload failed with
+    `sync ...\work\tmp\.: Access is denied`.
+- `patches/collector-manifest.patch`: empty collector directories returned
+  `"versions": null`; the Download Collectors page then crashed reading
+  `.length`. It now returns `[]`.
 
-Apply with `git -C src apply "$PWD/patches/windows-portability.patch"` after a
-fresh clone. The launcher itself also avoids pipe-backed `cmd.Stdout`, because
-`postgres.exe` inherits that pipe from `pg_ctl` on Windows and `Wait` never sees
-EOF.
+Apply both with
+`git -C src apply "$PWD/patches/windows-portability.patch" "$PWD/patches/collector-manifest.patch"`
+after a fresh clone. The launcher itself also avoids pipe-backed `cmd.Stdout`,
+because `postgres.exe` inherits that pipe from `pg_ctl` on Windows and `Wait`
+never sees EOF.
 
 ## CI and releases
 
@@ -109,8 +116,9 @@ EOF.
 on tags:
 
 - Go 1.27.4 + Node 22, p7zip, then clones BloodHound at the pinned commit
-  `54b4e76` and applies `patches/windows-portability.patch`;
-- fetches PostgreSQL/VC runtime, runs `scripts/build.sh windows`;
+  `54b4e76`, applies both patches, and builds with `BH_VERSION=v9.9.2`;
+- fetches PostgreSQL/VC runtime and both collectors, runs
+  `scripts/build.sh windows`;
 - uploads the `BloodHoundCE-windows-amd64` artifact;
 - on a `v*` tag, attaches `BloodHoundCE-windows-amd64.exe` and
   `SHA256SUMS-windows.txt` to the GitHub Release.
@@ -118,7 +126,7 @@ on tags:
 To ship a new build, push a tag:
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.1.1 && git push origin v0.1.1
 ```
 
 ## Verification performed
@@ -133,15 +141,18 @@ binaries. End-to-end on this machine:
   session token authorizes `/api/version` and `/api/v2/collectors/sharphound`;
 - ingest upload: `POST /api/v2/file-upload/start` → upload a ZIP →
   `POST /api/v2/file-upload/{id}/end` → 202/200, `File written and validated`;
+- browser: Download Collectors renders SharpHound v2.18.0 and AzureHound
+  v3.1.3, no error boundary; footer shows `BloodHound: v9.9.2`;
 - restart reuses the cluster and the persisted secrets;
 - Ctrl+C stops BloodHound and PostgreSQL cleanly (no postmaster left).
 
 `dist/BloodHoundCE.exe` was then run on the Windows host: extraction, `initdb`,
 PostgreSQL, migrations, extension data population, UI `/ui/` → 200, a hashed JS
-asset → 200, admin login → session token, authenticated `/api/version` →
-`v999.999.999`, and a ZIP ingest upload → 202 (`File written and validated`).
-Both the PostgreSQL server (`postgres.exe`) and BloodHound (`bloodhound.exe`)
-were running from `%LOCALAPPDATA%\BloodHoundCE\app`.
+asset → 200, admin login → session token, `/api/version` → `v9.9.2`, collector
+manifests for SharpHound and AzureHound with working `latest` downloads, and a
+ZIP ingest upload → 202 (`File written and validated`). Both the PostgreSQL
+server (`postgres.exe`) and BloodHound (`bloodhound.exe`) were running from
+`%LOCALAPPDATA%\BloodHoundCE\app`.
 
 ## Limits / risks
 
@@ -151,8 +162,6 @@ were running from `%LOCALAPPDATA%\BloodHoundCE\app`.
   apply the exclusions above before the first run.
 - Non-ASCII paths and paths near the 260-character limit can break PostgreSQL on
   Windows; use an ASCII `-home` path if that happens.
-- AzureHound is not bundled; the collector page will list no AzureHound versions.
-  SharpHound is bundled.
 - PostgreSQL runs as the logged-in user; `pgdata` is only as protected as that
   profile directory.
 - The build pins BloodHound `src/` HEAD at clone time and PostgreSQL 18.7.0.

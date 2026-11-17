@@ -1,0 +1,13 @@
+diff --git a/cmd/api/src/config/config.go b/cmd/api/src/config/config.go
+index 1fdbe5e..26de7a2 100644
+--- a/cmd/api/src/config/config.go
++++ b/cmd/api/src/config/config.go
+@@ -449,7 +449,7 @@ func (s Configuration) SaveCollectorManifests() (CollectorManifests, error) {
+ 
+ func generateCollectorManifest(collectorDir string) (CollectorManifest, error) {
+ 	var (
+-		collectorVersions []CollectorVersion
++		collectorVersions = []CollectorVersion{}
+ 		latestVersion     string
+ 	)
+ 
