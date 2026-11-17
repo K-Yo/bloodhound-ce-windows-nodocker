@@ -4,16 +4,110 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+  schedule:
+    - cron: '17 6 * * *'
   workflow_dispatch:
+    inputs:
+      bh_version:
+        description: 'Upstream BloodHound version (v9.10.0); empty uses upstream.env'
+        required: false
+      bh_commit:
+        description: 'Upstream commit SHA; empty resolves from bh_version'
+        required: false
+      release_tag:
+        description: 'Release tag to create/update; empty builds an artifact only'
+        required: false
 
 permissions:
   contents: write
 
-env:
-  BH_VERSION: v9.9.2
+concurrency:
+  group: windows-build
+  cancel-in-progress: false
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+      bh_version: ${{ steps.decide.outputs.bh_version }}
+      bh_commit: ${{ steps.decide.outputs.bh_commit }}
+      release_tag: ${{ steps.decide.outputs.release_tag }}
+      release_name: ${{ steps.decide.outputs.release_name }}
+      auto: ${{ steps.decide.outputs.auto }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Choose version
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          IN_VERSION: ${{ inputs.bh_version }}
+          IN_COMMIT: ${{ inputs.bh_commit }}
+          IN_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          source ./upstream.env
+
+          UPSTREAM=specterops/bloodhound
+          api() { curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/$1"; }
+
+          build=true
+          auto=false
+          release_tag=""
+          note=""
+
+          case "$EVENT" in
+            schedule)
+              latest=$(api "repos/$UPSTREAM/releases/latest" | jq -r '.tag_name // empty')
+              if [[ ! "$latest" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "latest upstream release '$latest' is not a stable semver tag; skipping"
+                build=false
+              elif [ "$latest" = "$BH_VERSION" ]; then
+                echo "already tracking $BH_VERSION; nothing to release"
+                build=false
+              elif [ "$(printf '%s\n%s\n' "$BH_VERSION" "$latest" | sort -V | tail -n1)" != "$latest" ]; then
+                echo "upstream $latest is older than $BH_VERSION; skipping"
+                build=false
+              else
+                BH_COMMIT=$(api "repos/$UPSTREAM/commits/$latest" | jq -r '.sha')
+                BH_VERSION="$latest"
+                release_tag="$latest"
+                auto=true
+                note="upstream release $latest"
+              fi
+              ;;
+            workflow_dispatch)
+              [ -n "${IN_VERSION:-}" ] && BH_VERSION="$IN_VERSION"
+              if [ -n "${IN_COMMIT:-}" ]; then
+                BH_COMMIT="$IN_COMMIT"
+              elif [ -n "${IN_VERSION:-}" ]; then
+                BH_COMMIT=$(api "repos/$UPSTREAM/commits/$IN_VERSION" | jq -r '.sha')
+              fi
+              release_tag="${IN_TAG:-}"
+              ;;
+            push)
+              if [[ "$REF" == refs/tags/* ]]; then
+                release_tag="${REF#refs/tags/}"
+              fi
+              ;;
+          esac
+
+          {
+            echo "build=$build"
+            echo "bh_version=$BH_VERSION"
+            echo "bh_commit=$BH_COMMIT"
+            echo "release_tag=$release_tag"
+            echo "auto=$auto"
+            echo "release_name=BloodHound CE ${BH_VERSION#v} (Windows, embedded PostgreSQL)"
+          } >> "$GITHUB_OUTPUT"
+          echo "build=$build version=$BH_VERSION commit=$BH_COMMIT tag=$release_tag auto=$auto $note"
+
   build:
+    needs: prepare
+    if: needs.prepare.outputs.build == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,16 +126,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y p7zip-full zip unzip
 
-      - name: Checkout BloodHound with Windows patches
+      - name: Checkout BloodHound with patches
         run: |
           git clone --filter=blob:none https://github.com/SpecterOps/BloodHound.git src
-          git -C src checkout 54b4e764e645468d8393f99214ab9611bb171f83
-          git -C src apply "$GITHUB_WORKSPACE/patches/windows-portability.patch" "$GITHUB_WORKSPACE/patches/collector-manifest.patch"
+          git -C src checkout "${{ needs.prepare.outputs.bh_commit }}"
+          git -C src apply --3way "$GITHUB_WORKSPACE/patches/windows-portability.patch" "$GITHUB_WORKSPACE/patches/collector-manifest.patch"
 
       - name: Fetch PostgreSQL payload
         run: scripts/fetch-postgres.sh windows
 
       - name: Build self-contained exe
+        env:
+          BH_VERSION: ${{ needs.prepare.outputs.bh_version }}
         run: scripts/build.sh windows
 
       - name: Package
@@ -58,10 +154,47 @@ jobs:
             dist/SHA256SUMS-windows.txt
 
       - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: needs.prepare.outputs.release_tag != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.prepare.outputs.release_tag }}
+          name: ${{ needs.prepare.outputs.release_name }}
+          body: |
+            Automated build of BloodHound CE ${{ needs.prepare.outputs.bh_version }} for Windows x64.
+            No Docker, no Neo4j; PostgreSQL 18.7 is embedded (`graph_driver=pg`).
+
+            - upstream commit: `${{ needs.prepare.outputs.bh_commit }}`
+            - SharpHound v2.18.0 and AzureHound v3.1.3 bundled
+            - runs from `%LOCALAPPDATA%\BloodHoundCE`, loopback only
+            - initial admin password: `%LOCALAPPDATA%\BloodHoundCE\secrets.json`
+            - antivirus exclusions are required; see the README
+
+            Checksum: see `SHA256SUMS-windows.txt`.
           files: |
             dist/BloodHoundCE-windows-amd64.exe
             dist/SHA256SUMS-windows.txt
           overwrite_files: true
+
+  record:
+    needs: [prepare, build]
+    if: needs.prepare.outputs.auto == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Advance upstream pin
+        run: |
+          printf 'BH_VERSION=%s\nBH_COMMIT=%s\n' \
+            "${{ needs.prepare.outputs.bh_version }}" \
+            "${{ needs.prepare.outputs.bh_commit }}" > upstream.env
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add upstream.env
+          if git diff --cached --quiet; then
+            echo "upstream.env already current"
+            exit 0
+          fi
+          git commit -m "chore: track BloodHound CE ${{ needs.prepare.outputs.bh_version }} [skip ci]"
+          git push origin HEAD:main

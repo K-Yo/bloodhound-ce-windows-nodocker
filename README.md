@@ -112,22 +112,43 @@ never sees EOF.
 
 ## CI and releases
 
-`.github/workflows/windows-build.yml` builds the exe on every push to `main` and
-on tags:
+`upstream.env` pins the upstream version and commit:
 
-- Go 1.27.4 + Node 22, p7zip, then clones BloodHound at the pinned commit
-  `54b4e76`, applies both patches, and builds with `BH_VERSION=v9.9.2`;
-- fetches PostgreSQL/VC runtime and both collectors, runs
-  `scripts/build.sh windows`;
-- uploads the `BloodHoundCE-windows-amd64` artifact;
-- on a `v*` tag, attaches `BloodHoundCE-windows-amd64.exe` and
-  `SHA256SUMS-windows.txt` to the GitHub Release.
+```
+BH_VERSION=v9.9.2
+BH_COMMIT=54b4e764e645468d8393f99214ab9611bb171f83
+```
 
-To ship a new build, push a tag:
+`.github/workflows/windows-build.yml` has a `prepare` job that decides what to
+build, then a `build` job (Go 1.27.4, Node 22, p7zip; clones BloodHound at the
+pinned commit, applies both patches, fetches PostgreSQL/VC runtime and both
+collectors) and a `record` job:
+
+- **push to `main`** — build only, artifact `BloodHoundCE-windows-amd64`.
+- **push of a `v*` tag** — build and attach the exe + checksum to that release.
+- **schedule (daily 06:17 UTC)** — checks SpecterOps' latest stable release.
+  If it is newer than `BH_VERSION`, it resolves the release tag's commit, builds
+  it, and publishes a release whose tag mirrors upstream (for example
+  `v9.10.0`). Only after a successful release does the `record` job advance
+  `upstream.env`.
+- **workflow_dispatch** — optional `bh_version`, `bh_commit`, and `release_tag`
+  inputs for manual builds/releases; empty inputs use `upstream.env`.
 
 ```bash
-git tag v0.1.1 && git push origin v0.1.1
+# manual build+release of a specific upstream version
+gh workflow run windows-build.yml -f bh_version=v9.10.0 -f release_tag=v9.10.0
 ```
+
+Caveats:
+
+- Only stable upstream releases are considered (no drafts/prereleases).
+- GitHub scheduled workflows can be delayed and are disabled after 60 days of
+  repository inactivity; re-enable or use `workflow_dispatch`.
+- The two patches touch upstream files. If a new release changes those regions,
+  `git apply` fails and the run stops before publishing anything; update the
+  patch and re-run.
+- Automatic release tags track upstream (`v9.10.0`); the initial packaging tags
+  (`v0.1.0`, `v0.1.1`) remain lower in semver order.
 
 ## Verification performed
 
